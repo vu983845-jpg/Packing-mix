@@ -2,17 +2,68 @@
 
 import { useState } from 'react';
 import { LogIn } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
     const router = useRouter();
 
-    const handleLogin = (e: React.FormEvent) => {
+    const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
-        // In a real app, integrate with Supabase Auth here
-        router.push('/');
+        setIsLoading(true);
+        setErrorMsg(null);
+
+        try {
+            // First attempt to login
+            const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            });
+
+            if (signInError) {
+                // If invalid credentials, it might be a new user (for this demo's auto-provisioning)
+                if (signInError.message.includes("Invalid login credentials")) {
+                    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+                        email,
+                        password,
+                        options: { data: { name: email.split('@')[0] } }
+                    });
+
+                    if (signUpError) {
+                        throw signUpError;
+                    }
+
+                    // Register in public.users 
+                    if (signUpData.user) {
+                        await supabase.from('users').insert({
+                            id: signUpData.user.id,
+                            email: email,
+                            name: email.split('@')[0],
+                            role: 'user'
+                        });
+                    }
+
+                    // After signup, they are usually logged in immediately if email confirmations are off
+                    // If confirmations are on in Supabase, this will error later, requiring the user to disable it.
+                    router.push('/');
+                    return;
+                } else {
+                    throw signInError;
+                }
+            }
+
+            // Success
+            router.push('/');
+        } catch (error: any) {
+            console.error('Login error:', error);
+            setErrorMsg(error.message || 'Đăng nhập thất bại.');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     return (
@@ -35,6 +86,12 @@ export default function LoginPage() {
                     <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Factory Quality Monitoring System</p>
                 </div>
 
+                {errorMsg && (
+                    <div style={{ background: 'var(--color-danger-light)', color: 'var(--color-danger-dark)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
+                        {errorMsg}
+                    </div>
+                )}
+
                 <form onSubmit={handleLogin}>
                     <div className="form-group">
                         <label className="form-label">Email Address</label>
@@ -43,7 +100,7 @@ export default function LoginPage() {
                             className="form-control"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            placeholder="admin@factory.local"
+                            placeholder="packing@dds.com"
                             required
                         />
                     </div>
@@ -58,8 +115,8 @@ export default function LoginPage() {
                             required
                         />
                     </div>
-                    <button type="submit" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-                        <LogIn size={18} /> Đăng Nhập
+                    <button type="submit" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={isLoading}>
+                        {isLoading ? 'Đang xử lý...' : <><LogIn size={18} /> Đăng Nhập</>}
                     </button>
                 </form>
 
