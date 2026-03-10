@@ -14,6 +14,7 @@ export default function EditInspection() {
     const inspectionId = params.id as string;
 
     const [standards, setStandards] = useState<QualityStandard[]>([]);
+    const [products, setProducts] = useState<any[]>([]);
     const [productId, setProductId] = useState<string>('');
 
     const [clusterCount, setClusterCount] = useState<number>(11);
@@ -35,6 +36,10 @@ export default function EditInspection() {
     useEffect(() => {
         const fetchData = async () => {
             try {
+                // Fetch products
+                const { data: pData } = await supabase.from('products').select('*').eq('active', true);
+                if (pData) setProducts(pData);
+
                 // 1. Fetch standards
                 const { data: stdData } = await supabase.from('quality_standards').select('*').eq('active', true);
                 if (stdData && stdData.length > 0) {
@@ -282,8 +287,14 @@ export default function EditInspection() {
                         </div>
                         <div className="form-group">
                             <label className="form-label">Mã hàng / Tên hàng</label>
-                            <select className="form-control" disabled>
-                                <option>MIX-001 (Mix Hạt Dinh Dưỡng)</option>
+                            <select className="form-control" value={productId} onChange={(e) => setProductId(e.target.value)}>
+                                {products.length > 0 ? (
+                                    products.map(p => (
+                                        <option key={p.id} value={p.id}>{p.product_code} ({p.product_name})</option>
+                                    ))
+                                ) : (
+                                    <option value="009db42d-2099-4c12-861f-a3d5b0c9a752">MIX-001 (Mix Hạt Dinh Dưỡng)</option>
+                                )}
                             </select>
                         </div>
                         <div className="form-group">
