@@ -34,6 +34,9 @@ export default function LoginPage() {
                     });
 
                     if (signUpError) {
+                        if (signUpError.message.includes("User already registered")) {
+                            throw new Error("Sai mật khẩu (Tài khoản đã tồn tại).");
+                        }
                         throw signUpError;
                     }
 
@@ -47,8 +50,11 @@ export default function LoginPage() {
                         });
                     }
 
-                    // After signup, they are usually logged in immediately if email confirmations are off
-                    // If confirmations are on in Supabase, this will error later, requiring the user to disable it.
+                    if (!signUpData.session) {
+                        setErrorMsg('Chưa thiết lập session. Vui lòng tắt "Confirm Email" trong Supabase (Authentication -> Providers) hoặc kiểm tra hộp thư xác nhận để đăng nhập lại.');
+                        return;
+                    }
+
                     router.push('/');
                     return;
                 } else {
