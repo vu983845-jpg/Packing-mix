@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
 
 export default function AuthProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter();
@@ -10,13 +9,13 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        const checkUser = async () => {
+        const checkUser = () => {
             try {
-                const { data: { session } } = await supabase.auth.getSession();
+                const isAuth = window.localStorage.getItem('demo_auth') === 'true';
 
-                if (!session && pathname !== '/login') {
+                if (!isAuth && pathname !== '/login') {
                     router.push('/login');
-                } else if (session && pathname === '/login') {
+                } else if (isAuth && pathname === '/login') {
                     router.push('/');
                 }
             } catch (error) {
@@ -27,18 +26,6 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
         };
 
         checkUser();
-
-        const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-            if (event === 'SIGNED_OUT') {
-                router.push('/login');
-            } else if (event === 'SIGNED_IN' && pathname === '/login') {
-                router.push('/');
-            }
-        });
-
-        return () => {
-            authListener.subscription.unsubscribe();
-        };
     }, [pathname, router]);
 
     if (isLoading) {

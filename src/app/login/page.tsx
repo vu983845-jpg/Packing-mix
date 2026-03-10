@@ -18,52 +18,30 @@ export default function LoginPage() {
         setErrorMsg(null);
 
         try {
-            // First attempt to login
-            const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-                email,
-                password,
-            });
+            // Simple credential check for demo purposes to avoid Supabase Auth Schema errors
+            if (email === 'packing@dds.com' && password === 'Packing2026@') {
+                // Determine if user exists in public.users to ensure DB integrity
+                const { data: userData } = await supabase.from('users').select('*').eq('email', email).single();
 
-            if (signInError) {
-                // If invalid credentials, it might be a new user (for this demo's auto-provisioning)
-                if (signInError.message.includes("Invalid login credentials")) {
-                    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-                        email,
-                        password,
-                        options: { data: { name: email.split('@')[0] } }
+                if (!userData) {
+                    // Create the mock user in the public table if it doesn't exist yet
+                    await supabase.from('users').insert({
+                        id: '5a66bc48-d6f4-4274-bda9-dca4ae3a07fd', // hardcoded demo UUID
+                        email: email,
+                        name: 'Packing Team',
+                        role: 'user'
                     });
-
-                    if (signUpError) {
-                        if (signUpError.message.includes("User already registered")) {
-                            throw new Error("Sai mật khẩu (Tài khoản đã tồn tại).");
-                        }
-                        throw signUpError;
-                    }
-
-                    // Register in public.users 
-                    if (signUpData.user) {
-                        await supabase.from('users').insert({
-                            id: signUpData.user.id,
-                            email: email,
-                            name: email.split('@')[0],
-                            role: 'user'
-                        });
-                    }
-
-                    if (!signUpData.session) {
-                        setErrorMsg('Chưa thiết lập session. Vui lòng tắt "Confirm Email" trong Supabase (Authentication -> Providers) hoặc kiểm tra hộp thư xác nhận để đăng nhập lại.');
-                        return;
-                    }
-
-                    router.push('/');
-                    return;
-                } else {
-                    throw signInError;
                 }
+
+                // Set a simple localstorage flag to simulate being logged in
+                window.localStorage.setItem('demo_auth', 'true');
+                window.localStorage.setItem('demo_user', email);
+                router.push('/');
+
+            } else {
+                throw new Error('Sai email hoặc mật khẩu!');
             }
 
-            // Success
-            router.push('/');
         } catch (error: any) {
             console.error('Login error:', error);
             setErrorMsg(error.message || 'Đăng nhập thất bại.');
