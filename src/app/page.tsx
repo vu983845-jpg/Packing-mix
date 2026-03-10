@@ -6,87 +6,152 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts';
-import { Plus, Filter, AlertTriangle, CheckCircle2, FileWarning } from 'lucide-react';
+import { Plus, Filter, AlertTriangle, CheckCircle2, FileWarning, RefreshCw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { MOCK_STANDARDS } from '@/lib/utils'; // fallback for standard limits
 
 export default function Dashboard() {
   const [inspections, setInspections] = useState<any[]>([]);
   const [stats, setStats] = useState({ total: 0, pass: 0, fail: 0 });
   const [isLoading, setIsLoading] = useState(true);
 
-  // We still use mock data for charts initially unless we aggregate everything 
-  // For production, we would write an RPC function in Supabase to aggregate daily standard vs actual
-  const mockChartData = [
-    { name: 'Hạt', actual: 310, standard: 310 },
-    { name: 'Bể', actual: 15, standard: 30 },
-    { name: 'LP ss', actual: 1.2, standard: 2 },
-    { name: 'A', actual: 0.8, standard: 1.5 },
-    { name: 'B', actual: 2, standard: 4 },
-    { name: 'C', actual: 5, standard: 7.5 },
-  ];
+  // Realtime Chart Data
+  const [chartData, setChartData] = useState<any[]>([]);
+
+  // Filtering
+  const [availableContainers, setAvailableContainers] = useState<string[]>([]);
+  const [selectedContainer, setSelectedContainer] = useState<string>('ALL');
+
+  const fetchDashboardData = async () => {
+    setIsLoading(true);
+    try {
+      const today = new Date().toISOString().split('T')[0];
+
+      // 1. Fetch recent inspections (apply container filter globally to everything)
+      let query = supabase
+        .from('inspections')
+        .select(`
+          id, inspection_date, shift, container_no, isp_no, inspector_name, result, status, cluster_count,
+          products ( product_code )
+        `)
+        .eq('inspection_date', today)
+        .order('created_at', { ascending: false });
+
+      if (selectedContainer !== 'ALL') {
+        query = query.eq('container_no', selectedContainer);
+      }
+
+      const { data: recentData } = await query;
+
+      if (recentData) {
+        setInspections(recentData);
+
+        // Basic stats
+        const passCount = recentData.filter(i => i.result === 'PASS').length;
+        const failCount = recentData.filter(i => i.result === 'FAIL' || i.result === 'CLUSTER_ABNORMAL').length;
+        setStats({
+          total: recentData.length,
+          pass: passCount,
+          fail: failCount
+        });
+
+        // 2. Fetch all unique containers for today (only if not already loaded, or we could just fetch all today)
+        const { data: allToday } = await supabase.from('inspections').select('container_no').eq('inspection_date', today);
+        if (allToday) {
+          const uniqueConts = Array.from(new Set(allToday.map(i => i.container_no).filter(Boolean)));
+          setAvailableContainers(uniqueConts as string[]);
+        }
+
+        // 3. Aggregate Chart Data
+        const inspectionIds = recentData.map(i => i.id);
+
+        if (inspectionIds.length > 0) {
+          const { data: summaries } = await supabase
+            .from('inspection_summary')
+            .select('*')
+            .in('inspection_id', inspectionIds);
+
+          if (summaries) {
+            // Aggregate averages by indicator
+            const indicatorMap: Record<string, { sum: number, count: number }> = {};
+            summaries.forEach(s => {
+              if (!indicatorMap[s.indicator_name]) indicatorMap[s.indicator_name] = { sum: 0, count: 0 };
+              if (s.avg_value !== null) {
+                indicatorMap[s.indicator_name].sum += Number(s.avg_value);
+                indicatorMap[s.indicator_name].count++;
+              }
+            });
+
+            // Map to chart format, comparing with standards
+            const liveChartData = MOCK_STANDARDS.map(std => {
+              const agg = indicatorMap[std.indicator_name];
+              const actualVal = agg && agg.count > 0 ? Number((agg.sum / agg.count).toFixed(2)) : 0;
+              return {
+                name: std.indicator_name,
+                actual: actualVal,
+                standard: std.rule_type === 'range' ? std.max_value : (std.max_value || std.min_value || 0)
+              };
+            });
+            setChartData(liveChartData);
+          }
+        } else {
+          // Reset chart if no data
+          setChartData(MOCK_STANDARDS.map(std => ({
+            name: std.indicator_name,
+            actual: 0,
+            standard: std.rule_type === 'range' ? std.max_value : (std.max_value || std.min_value || 0)
+          })));
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching dashboard data:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchDashboardData = async () => {
-      setIsLoading(true);
-      try {
-        // Fetch recent inspections
-        const { data: recentData } = await supabase
-          .from('inspections')
-          .select(`
-            id, inspection_date, shift, container_no, isp_no, inspector_name, result, status,
-            products ( product_code )
-          `)
-          .order('created_at', { ascending: false })
-          .limit(10);
-
-        if (recentData) {
-          setInspections(recentData);
-        }
-
-        // Fetch basic stats for today
-        const today = new Date().toISOString().split('T')[0];
-        const { data: todayStats } = await supabase
-          .from('inspections')
-          .select('id, result')
-          .eq('inspection_date', today);
-
-        if (todayStats) {
-          const passCount = todayStats.filter(i => i.result === 'PASS').length;
-          const failCount = todayStats.filter(i => i.result === 'FAIL' || i.result === 'CLUSTER_ABNORMAL').length;
-          setStats({
-            total: todayStats.length,
-            pass: passCount,
-            fail: failCount
-          });
-        }
-      } catch (err) {
-        console.error('Error fetching dashboard data:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     fetchDashboardData();
-  }, []);
+  }, [selectedContainer]); // refetch when container changes
 
   return (
     <div className="dashboard-page">
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem', alignItems: 'center' }}>
         <div>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Quality Dashboard</h2>
-          <p style={{ color: 'var(--text-secondary)' }}>Overview of factory mix quality performance today</p>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Quality Live Tracking</h2>
+          <p style={{ color: 'var(--text-secondary)' }}>Real-time cluster tracking and aggregation</p>
         </div>
-        <Link href="/inspections/new" className="btn btn-primary">
-          <Plus size={18} /> New Inspection
-        </Link>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'white', padding: '0.25rem 0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
+            <Filter size={16} color="var(--text-secondary)" />
+            <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>Cont No:</span>
+            <select
+              value={selectedContainer}
+              onChange={e => setSelectedContainer(e.target.value)}
+              style={{ border: 'none', background: 'transparent', outline: 'none', fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-primary)' }}
+            >
+              <option value="ALL">All Containers (Today)</option>
+              {availableContainers.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          <button onClick={fetchDashboardData} className="btn btn-secondary" style={{ padding: '0.5rem' }} title="Refresh Data">
+            <RefreshCw size={18} className={isLoading ? "animate-spin" : ""} />
+          </button>
+
+          <Link href="/inspections/new" className="btn btn-primary">
+            <Plus size={18} /> New Batch
+          </Link>
+        </div>
       </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-4" style={{ marginBottom: '2rem' }}>
         <div className="kpi-card">
-          <span className="kpi-title">Total Inspections Today</span>
+          <span className="kpi-title">Total Lots (Filtered)</span>
           <span className="kpi-value">{isLoading ? '...' : stats.total}</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Based on daily input</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{selectedContainer === 'ALL' ? 'Across all lines' : `Container: ${selectedContainer}`}</span>
         </div>
         <div className="kpi-card">
           <span className="kpi-title">Passed Lots</span>
@@ -101,9 +166,11 @@ export default function Dashboard() {
           <span style={{ fontSize: '0.75rem', color: 'var(--color-danger-dark)' }}>Requires attention</span>
         </div>
         <div className="kpi-card">
-          <span className="kpi-title">Database Status</span>
-          <span className="kpi-value" style={{ color: '#3b82f6' }}>Live</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Connected to Supabase</span>
+          <span className="kpi-title">Total Clusters Evaluated</span>
+          <span className="kpi-value" style={{ color: '#3b82f6' }}>
+            {isLoading ? '...' : inspections.reduce((acc, curr) => acc + (curr.cluster_count || 0), 0)}
+          </span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Sampling coverage</span>
         </div>
       </div>
 
@@ -111,17 +178,17 @@ export default function Dashboard() {
       <div className="grid grid-cols-2" style={{ marginBottom: '2rem' }}>
         <div className="card">
           <div className="card-header">
-            <h3>Actual vs Standard (MIX-001)</h3>
+            <h3>Aggregated Average (Realtime)</h3>
           </div>
           <div className="card-body chart-container">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={mockChartData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} />
                 <YAxis axisLine={false} tickLine={false} />
                 <RechartsTooltip />
                 <Legend />
-                <Bar dataKey="actual" name="Actual Avg (Demo)" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="actual" name="Live Actual Avg" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="standard" name="Standard Limit" fill="#cbd5e1" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -130,15 +197,15 @@ export default function Dashboard() {
 
         <div className="card">
           <div className="card-header">
-            <h3>Quality Profile Radar</h3>
+            <h3>Quality Profile Radar (Realtime)</h3>
           </div>
           <div className="card-body chart-container" style={{ display: 'flex', justifyContent: 'center' }}>
             <ResponsiveContainer width="100%" height="100%">
-              <RadarChart cx="50%" cy="50%" outerRadius="80%" data={mockChartData}>
+              <RadarChart cx="50%" cy="50%" outerRadius="80%" data={chartData}>
                 <PolarGrid stroke="#e2e8f0" />
                 <PolarAngleAxis dataKey="name" />
                 <PolarRadiusAxis angle={30} domain={[0, 'auto']} />
-                <Radar name="Actual" dataKey="actual" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.6} />
+                <Radar name="Live Area" dataKey="actual" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.6} />
                 <RechartsTooltip />
               </RadarChart>
             </ResponsiveContainer>
@@ -149,12 +216,7 @@ export default function Dashboard() {
       {/* Recent Inspections Table */}
       <div className="card">
         <div className="card-header">
-          <h3>Recent Inspections (Live from Database)</h3>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem' }}>
-              <Filter size={16} /> Filter
-            </button>
-          </div>
+          <h3>Progressive Tracking Table</h3>
         </div>
         <div className="card-body" style={{ padding: 0 }}>
           <div className="data-table-wrapper" style={{ border: 'none', borderRadius: 0 }}>
@@ -166,8 +228,8 @@ export default function Dashboard() {
                   <th>Product</th>
                   <th>Cont No</th>
                   <th>ISP No</th>
-                  <th>Inspector</th>
-                  <th style={{ textAlign: 'center' }}>Status</th>
+                  <th>Clusters In Data</th>
+                  <th style={{ textAlign: 'center' }}>Result</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -175,16 +237,16 @@ export default function Dashboard() {
                 {isLoading ? (
                   <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2rem' }}>Loading realtime data...</td></tr>
                 ) : inspections.length === 0 ? (
-                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2rem' }}>No inspections recorded yet.</td></tr>
+                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2rem' }}>No data found for this container today.</td></tr>
                 ) : (
                   inspections.map((isp: any) => (
                     <tr key={isp.id}>
                       <td>{isp.inspection_date}</td>
                       <td>{isp.shift}</td>
                       <td>{isp.products?.product_code || 'MIX-001'}</td>
-                      <td>{isp.container_no}</td>
-                      <td>{isp.isp_no}</td>
-                      <td>{isp.inspector_name}</td>
+                      <td style={{ fontWeight: 600 }}>{isp.container_no || '-'}</td>
+                      <td>{isp.isp_no || '-'}</td>
+                      <td>{isp.cluster_count} Clusters Built</td>
                       <td style={{ textAlign: 'center' }}>
                         {isp.result === 'PASS' ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-success)' }}>
@@ -202,7 +264,7 @@ export default function Dashboard() {
                       </td>
                       <td>
                         <Link href={`/inspections/${isp.id}`} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}>
-                          View
+                          Edit / View
                         </Link>
                       </td>
                     </tr>
