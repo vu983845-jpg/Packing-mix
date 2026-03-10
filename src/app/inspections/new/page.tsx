@@ -1,29 +1,60 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
-import { Save, CheckCircle, ArrowLeft } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Save, CheckCircle, ArrowLeft, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-import { MOCK_STANDARDS, evaluateRule, formatStandardStr } from '@/lib/utils';
-import { CellStatus } from '@/lib/types';
+import { evaluateRule, formatStandardStr, MOCK_STANDARDS } from '@/lib/utils';
+import { CellStatus, QualityStandard } from '@/lib/types';
+import { supabase } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
 
 export default function NewInspection() {
+    const router = useRouter();
+
+    // Standard and Product logic
+    const [standards, setStandards] = useState<QualityStandard[]>([]);
+    const [productId, setProductId] = useState<string>('');
+
     const [clusterCount, setClusterCount] = useState<number>(11);
     const [gridData, setGridData] = useState<Record<string, Record<number, string>>>({});
 
-    // Initialize grid standard rows
-    const indicators = MOCK_STANDARDS.map(s => s.indicator_name);
+    // Form Info
+    const [inspectionDate, setInspectionDate] = useState<string>(new Date().toISOString().split('T')[0]);
+    const [shift, setShift] = useState<string>('Ca 1');
+    const [containerNo, setContainerNo] = useState<string>('');
+    const [ispNo, setIspNo] = useState<string>('');
+    const [remarks, setRemarks] = useState<string>('');
+
+    // UI State
+    const [isSaving, setIsSaving] = useState(false);
+    const [errorStatus, setErrorStatus] = useState<string | null>(null);
+
+    useEffect(() => {
+        // Fetch standards from real DB
+        const fetchStandards = async () => {
+            const { data, error } = await supabase
+                .from('quality_standards')
+                .select('*')
+                .eq('active', true);
+
+            if (!error && data && data.length > 0) {
+                setStandards(data);
+                setProductId(data[0].product_id); // Pick product id from first standard for simplicity
+            } else {
+                // fallback to MOCK if local dev not set up 
+                setStandards(MOCK_STANDARDS);
+                setProductId('009db42d-2099-4c12-861f-a3d5b0c9a752');
+            }
+        };
+        fetchStandards();
+    }, []);
 
     // Handlers
     const handleCellChange = (indicator: string, clusterIdx: number, value: string) => {
-        // Basic number validation
         if (value !== '' && isNaN(Number(value))) return;
-
         setGridData(prev => ({
             ...prev,
-            [indicator]: {
-                ...(prev[indicator] || {}),
-                [clusterIdx]: value
-            }
+            [indicator]: { ...(prev[indicator] || {}), [clusterIdx]: value }
         }));
     };
 
@@ -36,9 +67,7 @@ export default function NewInspection() {
 
     const calculateAverage = (indicator: string) => {
         const row = gridData[indicator] || {};
-        let sum = 0;
-        let count = 0;
-
+        let sum = 0; let count = 0;
         for (let i = 1; i <= clusterCount; i++) {
             const valStr = row[i];
             if (valStr && valStr.trim() !== '') {
@@ -46,9 +75,96 @@ export default function NewInspection() {
                 count++;
             }
         }
-
         if (count === 0) return null;
         return Number((sum / count).toFixed(2));
+    };
+
+    const handleSubmit = async (submitStatus: 'draft' | 'submitted') => {
+        try {
+            setIsSaving(true);
+            setErrorStatus(null);
+
+            // Determine overall pass status
+            let overallStatus = 'PASS';
+            const summariesToInsert = [];
+            const valuesToInsert = [];
+
+            for (const std of standards) {
+                const avg = calculateAverage(std.indicator_name);
+                const st = evaluateRule(avg !== null ? avg : '', std);
+                if (st === 'fail') overallStatus = 'FAIL';
+
+                summariesToInsert.push({
+                    indicator_name: std.indicator_name,
+                    avg_value: avg,
+                    pass_fail: st
+                });
+
+                // Also collect individual values
+                for (let i = 1; i <= clusterCount; i++) {
+                    const raw = gridData[std.indicator_name]?.[i];
+                    if (raw && raw.trim() !== '') {
+                        valuesToInsert.push({
+                            indicator_name: std.indicator_name,
+                            cluster_no: i,
+                            value: Number(raw)
+                        });
+
+                        // secondary check if any individual cell fails
+                        const cellStatus = evaluateRule(Number(raw), std);
+                        if (cellStatus === 'fail' && overallStatus === 'PASS') {
+                            overallStatus = 'CLUSTER_ABNORMAL';
+                        }
+                    }
+                }
+            }
+
+            // 1. Insert into inspections
+            const { data: inspectionData, error: insError } = await supabase
+                .from('inspections')
+                .insert({
+                    inspection_date: inspectionDate,
+                    shift: shift,
+                    product_id: productId,
+                    container_no: containerNo,
+                    isp_no: ispNo,
+                    inspector_name: 'Admin User', // Hardcoded for demo
+                    remarks: remarks,
+                    cluster_count: clusterCount,
+                    status: submitStatus,
+                    result: overallStatus,
+                    created_by: 'c29db42d-2099-4c12-861f-a3d5b0c9a751' // Admin UUID from seed
+                })
+                .select()
+                .single();
+
+            if (insError) throw insError;
+
+            const inspectionId = inspectionData.id;
+
+            // 2. Insert values mapping to inspection_id
+            if (valuesToInsert.length > 0) {
+                const mappedValues = valuesToInsert.map(v => ({ ...v, inspection_id: inspectionId }));
+                const { error: valError } = await supabase.from('inspection_values').insert(mappedValues);
+                if (valError) throw valError;
+            }
+
+            // 3. Insert summaries
+            if (summariesToInsert.length > 0) {
+                const mappedSummaries = summariesToInsert.map(s => ({ ...s, inspection_id: inspectionId }));
+                const { error: sumError } = await supabase.from('inspection_summary').insert(mappedSummaries);
+                if (sumError) throw sumError;
+            }
+
+            // Success
+            router.push('/');
+
+        } catch (err: any) {
+            console.error(err);
+            setErrorStatus(err.message || 'Lỗi lưu dữ liệu. Vui lòng thử lại.');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     return (
@@ -64,10 +180,30 @@ export default function NewInspection() {
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
-                    <button className="btn btn-secondary"><Save size={18} /> Lưu nháp</button>
-                    <button className="btn btn-primary"><CheckCircle size={18} /> Gửi hoàn tất</button>
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => handleSubmit('draft')}
+                        disabled={isSaving}
+                    >
+                        {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                        Lưu nháp
+                    </button>
+                    <button
+                        className="btn btn-primary"
+                        onClick={() => handleSubmit('submitted')}
+                        disabled={isSaving}
+                    >
+                        {isSaving ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle size={18} />}
+                        Gửi hoàn tất
+                    </button>
                 </div>
             </div>
+
+            {errorStatus && (
+                <div style={{ background: 'var(--color-danger-light)', color: 'var(--color-danger-dark)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem' }}>
+                    <strong>Lỗi:</strong> {errorStatus}
+                </div>
+            )}
 
             <div className="card" style={{ marginBottom: '1.5rem' }}>
                 <div className="card-header">
@@ -77,11 +213,11 @@ export default function NewInspection() {
                     <div className="grid grid-cols-4">
                         <div className="form-group">
                             <label className="form-label">Ngày kiểm tra</label>
-                            <input type="date" className="form-control" defaultValue={new Date().toISOString().split('T')[0]} />
+                            <input type="date" className="form-control" value={inspectionDate} onChange={e => setInspectionDate(e.target.value)} />
                         </div>
                         <div className="form-group">
                             <label className="form-label">Ca</label>
-                            <select className="form-control">
+                            <select className="form-control" value={shift} onChange={e => setShift(e.target.value)}>
                                 <option>Ca 1</option>
                                 <option>Ca 2</option>
                                 <option>Ca 3</option>
@@ -89,7 +225,7 @@ export default function NewInspection() {
                         </div>
                         <div className="form-group">
                             <label className="form-label">Mã hàng / Tên hàng</label>
-                            <select className="form-control">
+                            <select className="form-control" disabled>
                                 <option>MIX-001 (Mix Hạt Dinh Dưỡng)</option>
                             </select>
                         </div>
@@ -99,15 +235,15 @@ export default function NewInspection() {
                         </div>
                         <div className="form-group">
                             <label className="form-label">Cont No</label>
-                            <input type="text" className="form-control" placeholder="Nhập số Cont..." />
+                            <input type="text" className="form-control" placeholder="Nhập số Cont..." value={containerNo} onChange={e => setContainerNo(e.target.value)} />
                         </div>
                         <div className="form-group">
                             <label className="form-label">ISP No</label>
-                            <input type="text" className="form-control" placeholder="Nhập ISP No..." />
+                            <input type="text" className="form-control" placeholder="Nhập ISP No..." value={ispNo} onChange={e => setIspNo(e.target.value)} />
                         </div>
                         <div className="form-group" style={{ gridColumn: 'span 2' }}>
                             <label className="form-label">Ghi chú</label>
-                            <input type="text" className="form-control" placeholder="Ghi chú thêm..." />
+                            <input type="text" className="form-control" placeholder="Ghi chú thêm..." value={remarks} onChange={e => setRemarks(e.target.value)} />
                         </div>
                     </div>
                 </div>
@@ -157,12 +293,12 @@ export default function NewInspection() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {MOCK_STANDARDS.map((std) => {
+                                {standards.map((std) => {
                                     const avg = calculateAverage(std.indicator_name);
-                                    const avgStatus = evaluateRule(avg, std);
+                                    const avgStatus = evaluateRule(avg !== null ? avg : '', std);
 
                                     return (
-                                        <tr key={std.indicator_name}>
+                                        <tr key={std.id}>
                                             <td className="col-sticky">{std.indicator_name}</td>
                                             <td style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                                                 {formatStandardStr(std)}
@@ -171,7 +307,7 @@ export default function NewInspection() {
                                             {Array.from({ length: clusterCount }, (_, i) => i + 1).map(clusterIdx => {
                                                 const cellValStr = gridData[std.indicator_name]?.[clusterIdx] || '';
                                                 const parsedVal = cellValStr ? Number(cellValStr) : null;
-                                                const cellStatus = cellValStr ? evaluateRule(parsedVal, std) : 'empty';
+                                                const cellStatus = cellValStr ? evaluateRule(parsedVal !== null ? parsedVal : '', std) : 'empty';
 
                                                 return (
                                                     <td key={clusterIdx} className={`editable ${getCellStatusClass(cellStatus)}`}>

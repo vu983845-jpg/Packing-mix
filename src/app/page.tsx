@@ -1,29 +1,74 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
-  PieChart, Pie, Cell, Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
+  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts';
-import { Plus, Search, Filter, AlertTriangle, CheckCircle2 } from 'lucide-react';
-
-const mockChartData = [
-  { name: 'Hạt', actual: 310, standard: 310 },
-  { name: 'Bể', actual: 15, standard: 30 },
-  { name: 'LP ss', actual: 1.2, standard: 2 },
-  { name: 'A', actual: 0.8, standard: 1.5 },
-  { name: 'B', actual: 2, standard: 4 },
-  { name: 'C', actual: 5, standard: 7.5 },
-];
-
-const mockPieData = [
-  { name: 'Pass', value: 85 },
-  { name: 'Fail', value: 15 },
-];
-const COLORS = ['#10b981', '#ef4444'];
+import { Plus, Filter, AlertTriangle, CheckCircle2, FileWarning } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 
 export default function Dashboard() {
+  const [inspections, setInspections] = useState<any[]>([]);
+  const [stats, setStats] = useState({ total: 0, pass: 0, fail: 0 });
+  const [isLoading, setIsLoading] = useState(true);
+
+  // We still use mock data for charts initially unless we aggregate everything 
+  // For production, we would write an RPC function in Supabase to aggregate daily standard vs actual
+  const mockChartData = [
+    { name: 'Hạt', actual: 310, standard: 310 },
+    { name: 'Bể', actual: 15, standard: 30 },
+    { name: 'LP ss', actual: 1.2, standard: 2 },
+    { name: 'A', actual: 0.8, standard: 1.5 },
+    { name: 'B', actual: 2, standard: 4 },
+    { name: 'C', actual: 5, standard: 7.5 },
+  ];
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      setIsLoading(true);
+      try {
+        // Fetch recent inspections
+        const { data: recentData } = await supabase
+          .from('inspections')
+          .select(`
+            id, inspection_date, shift, container_no, isp_no, inspector_name, result, status,
+            products ( product_code )
+          `)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (recentData) {
+          setInspections(recentData);
+        }
+
+        // Fetch basic stats for today
+        const today = new Date().toISOString().split('T')[0];
+        const { data: todayStats } = await supabase
+          .from('inspections')
+          .select('id, result')
+          .eq('inspection_date', today);
+
+        if (todayStats) {
+          const passCount = todayStats.filter(i => i.result === 'PASS').length;
+          const failCount = todayStats.filter(i => i.result === 'FAIL' || i.result === 'CLUSTER_ABNORMAL').length;
+          setStats({
+            total: todayStats.length,
+            pass: passCount,
+            fail: failCount
+          });
+        }
+      } catch (err) {
+        console.error('Error fetching dashboard data:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+  }, []);
+
   return (
     <div className="dashboard-page">
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
@@ -40,23 +85,25 @@ export default function Dashboard() {
       <div className="grid grid-cols-4" style={{ marginBottom: '2rem' }}>
         <div className="kpi-card">
           <span className="kpi-title">Total Inspections Today</span>
-          <span className="kpi-value">24</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Across 3 shifts</span>
+          <span className="kpi-value">{isLoading ? '...' : stats.total}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Based on daily input</span>
         </div>
         <div className="kpi-card">
           <span className="kpi-title">Passed Lots</span>
-          <span className="kpi-value" style={{ color: 'var(--color-success)' }}>21</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>87.5% passing rate</span>
+          <span className="kpi-value" style={{ color: 'var(--color-success)' }}>{isLoading ? '...' : stats.pass}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            {stats.total > 0 ? ((stats.pass / stats.total) * 100).toFixed(1) : 0}% passing rate
+          </span>
         </div>
         <div className="kpi-card" style={{ borderColor: 'var(--color-danger-light)', background: 'var(--color-danger-light)' }}>
           <span className="kpi-title" style={{ color: 'var(--color-danger-dark)' }}>Failed Lots</span>
-          <span className="kpi-value" style={{ color: 'var(--color-danger-dark)' }}>3</span>
+          <span className="kpi-value" style={{ color: 'var(--color-danger-dark)' }}>{isLoading ? '...' : stats.fail}</span>
           <span style={{ fontSize: '0.75rem', color: 'var(--color-danger-dark)' }}>Requires attention</span>
         </div>
         <div className="kpi-card">
-          <span className="kpi-title">Avg Defect Rate</span>
-          <span className="kpi-value">12.4</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Standard max 29</span>
+          <span className="kpi-title">Database Status</span>
+          <span className="kpi-value" style={{ color: '#3b82f6' }}>Live</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Connected to Supabase</span>
         </div>
       </div>
 
@@ -74,7 +121,7 @@ export default function Dashboard() {
                 <YAxis axisLine={false} tickLine={false} />
                 <RechartsTooltip />
                 <Legend />
-                <Bar dataKey="actual" name="Actual Avg" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="actual" name="Actual Avg (Demo)" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="standard" name="Standard Limit" fill="#cbd5e1" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -102,7 +149,7 @@ export default function Dashboard() {
       {/* Recent Inspections Table */}
       <div className="card">
         <div className="card-header">
-          <h3>Recent Inspections</h3>
+          <h3>Recent Inspections (Live from Database)</h3>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem' }}>
               <Filter size={16} /> Filter
@@ -125,34 +172,42 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>2024-05-20</td>
-                  <td>Shift 1</td>
-                  <td>MIX-001</td>
-                  <td>CONT-8890</td>
-                  <td>ISP-2401</td>
-                  <td>Nguyen Van A</td>
-                  <td style={{ textAlign: 'center' }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-success)' }}>
-                      <CheckCircle2 size={16} /> PASS
-                    </span>
-                  </td>
-                  <td><button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}>View</button></td>
-                </tr>
-                <tr>
-                  <td>2024-05-20</td>
-                  <td>Shift 1</td>
-                  <td>MIX-001</td>
-                  <td>CONT-8891</td>
-                  <td>ISP-2402</td>
-                  <td>Tran Thi B</td>
-                  <td style={{ textAlign: 'center' }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-danger)' }}>
-                      <AlertTriangle size={16} /> FAIL (Bể high)
-                    </span>
-                  </td>
-                  <td><button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}>View</button></td>
-                </tr>
+                {isLoading ? (
+                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2rem' }}>Loading realtime data...</td></tr>
+                ) : inspections.length === 0 ? (
+                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2rem' }}>No inspections recorded yet.</td></tr>
+                ) : (
+                  inspections.map((isp: any) => (
+                    <tr key={isp.id}>
+                      <td>{isp.inspection_date}</td>
+                      <td>{isp.shift}</td>
+                      <td>{isp.products?.product_code || 'MIX-001'}</td>
+                      <td>{isp.container_no}</td>
+                      <td>{isp.isp_no}</td>
+                      <td>{isp.inspector_name}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        {isp.result === 'PASS' ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-success)' }}>
+                            <CheckCircle2 size={16} /> PASS
+                          </span>
+                        ) : isp.result === 'CLUSTER_ABNORMAL' ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-warning)' }}>
+                            <FileWarning size={16} /> WARNING
+                          </span>
+                        ) : (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-danger)' }}>
+                            <AlertTriangle size={16} /> FAIL
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <Link href={`/inspections/${isp.id}`} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}>
+                          View
+                        </Link>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

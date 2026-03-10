@@ -93,18 +93,18 @@ ON CONFLICT (email) DO NOTHING;
 
 -- 2. Insert sample product
 INSERT INTO products (id, product_code, product_name, active)
-VALUES ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'MIX-001', 'Mix Hạt Dinh Dưỡng Tiêu Chuẩn', TRUE)
+VALUES ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'MIX-001', 'Mix Hạt Dinh Dưỡng Tiêu Chuẩn', TRUE)
 ON CONFLICT (product_code) DO NOTHING;
 
 -- 3. Insert standards for MIX-001 based on prompt requirements
 INSERT INTO quality_standards (product_id, indicator_name, rule_type, min_value, max_value)
 VALUES 
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'Hạt', 'range', 300, 320),
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'Bể', 'max', NULL, 30),
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'LP ss', 'max', NULL, 2),
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'A', 'max', NULL, 1.5),
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'B', 'max', NULL, 4),
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'C', 'max', NULL, 7.5),
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'Vết dao', 'max', NULL, 8),
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'Lụa', 'max', NULL, 8),
-    ('p09db42d-2099-4c12-861f-a3d5b0c9a752', 'Total defect', 'max', NULL, 29);
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'Hạt', 'range', 300, 320),
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'Bể', 'max', NULL, 30),
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'LP ss', 'max', NULL, 2),
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'A', 'max', NULL, 1.5),
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'B', 'max', NULL, 4),
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'C', 'max', NULL, 7.5),
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'Vết dao', 'max', NULL, 8),
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'Lụa', 'max', NULL, 8),
+    ('009db42d-2099-4c12-861f-a3d5b0c9a752', 'Total defect', 'max', NULL, 29);
