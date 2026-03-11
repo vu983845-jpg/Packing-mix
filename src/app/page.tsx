@@ -6,7 +6,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts';
-import { Plus, Filter, AlertTriangle, CheckCircle2, FileWarning, RefreshCw } from 'lucide-react';
+import { Plus, Filter, AlertTriangle, CheckCircle2, FileWarning, RefreshCw, Trash2, Edit } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { MOCK_STANDARDS } from '@/lib/utils'; // fallback for standard limits
 
@@ -107,6 +107,30 @@ export default function Dashboard() {
       console.error('Error fetching dashboard data:', err);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!confirm('Bạn có chắc chắn muốn xóa bản ghi này cùng toàn bộ dữ liệu cụm (clusters) của nó?')) return;
+
+    try {
+      const { error: summaryError } = await supabase.from('inspection_summary').delete().eq('inspection_id', id);
+      if (summaryError) throw summaryError;
+
+      const { error: valuesError } = await supabase.from('inspection_values').delete().eq('inspection_id', id);
+      if (valuesError) throw valuesError;
+
+      const { error: mainError } = await supabase.from('inspections').delete().eq('id', id);
+      if (mainError) throw mainError;
+
+      // Refresh list
+      setInspections(prev => prev.filter(i => i.id !== id));
+      alert('Đã xóa thành công!');
+      fetchDashboardData(); // Also refresh the dashboard chart stats
+    } catch (error: any) {
+      console.error('Lỗi khi xóa:', error);
+      alert('Lỗi xóa dữ liệu: ' + error.message);
     }
   };
 
@@ -223,14 +247,14 @@ export default function Dashboard() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Date</th>
-                  <th>Shift</th>
-                  <th>Product</th>
-                  <th>Cont No</th>
-                  <th>ISP No</th>
-                  <th>Clusters In Data</th>
-                  <th style={{ textAlign: 'center' }}>Result</th>
-                  <th>Action</th>
+                  <th className="col-sticky">Mã Lô (ISP)</th>
+                  <th>Ngày / Ca</th>
+                  <th>Container</th>
+                  <th>Mã Hàng</th>
+                  <th>Số Cụm (Clusters)</th>
+                  <th>Người KT</th>
+                  <th>Kết Quả</th>
+                  <th style={{ textAlign: 'right' }}>Thao tác</th>
                 </tr>
               </thead>
               <tbody>
@@ -239,20 +263,20 @@ export default function Dashboard() {
                 ) : inspections.length === 0 ? (
                   <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2rem' }}>No data found for this container today.</td></tr>
                 ) : (
-                  inspections.map((isp: any) => (
-                    <tr key={isp.id}>
-                      <td>{isp.inspection_date}</td>
-                      <td>{isp.shift}</td>
-                      <td>{isp.products?.product_code || 'MIX-001'}</td>
-                      <td style={{ fontWeight: 600 }}>{isp.container_no || '-'}</td>
-                      <td>{isp.isp_no || '-'}</td>
-                      <td>{isp.cluster_count} Clusters Built</td>
+                  inspections.map((inspection: any) => (
+                    <tr key={inspection.id}>
+                      <td>{inspection.isp_no || '-'}</td>
+                      <td>{inspection.inspection_date} / {inspection.shift}</td>
+                      <td style={{ fontWeight: 600 }}>{inspection.container_no || '-'}</td>
+                      <td>{inspection.products?.product_code || 'MIX-001'}</td>
+                      <td>{inspection.cluster_count}</td>
+                      <td>{inspection.inspector_name || 'N/A'}</td>
                       <td style={{ textAlign: 'center' }}>
-                        {isp.result === 'PASS' ? (
+                        {inspection.result === 'PASS' ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-success)' }}>
                             <CheckCircle2 size={16} /> PASS
                           </span>
-                        ) : isp.result === 'CLUSTER_ABNORMAL' ? (
+                        ) : inspection.result === 'CLUSTER_ABNORMAL' ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--color-warning)' }}>
                             <FileWarning size={16} /> WARNING
                           </span>
@@ -262,10 +286,19 @@ export default function Dashboard() {
                           </span>
                         )}
                       </td>
-                      <td>
-                        <Link href={`/inspections/${isp.id}`} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}>
-                          Edit / View
-                        </Link>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                          <Link href={`/inspections/${inspection.id}`} className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}>
+                            <Edit size={14} /> Sửa
+                          </Link>
+                          <button
+                            onClick={(e) => handleDelete(inspection.id, e)}
+                            className="btn"
+                            style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', backgroundColor: 'var(--color-danger-light)', color: 'var(--color-danger-dark)', border: 'none' }}
+                          >
+                            <Trash2 size={14} /> Xóa
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
